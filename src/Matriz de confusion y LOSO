@@ -1,0 +1,188 @@
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import scipy.signal as signal
+import seaborn as sns
+import tensorflow as tf
+
+from sklearn.model_selection import train_test_split, LeaveOneGroupOut
+from sklearn.preprocessing import StandardScaler
+from tensorflow.keras.utils import to_categorical
+from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix, classification_report
+
+# ==========================================
+# 1. CONFIGURACIÓN DEL DATASET
+# ==========================================
+
+
+files_per_class = {
+    0: ["Sebas-A-musc-3-ABC-L01.txt", "Lais-A-musc-3-ABC-L01.txt", "Alejandra-A-Musc-ABC-L01.txt", "Dani_A_1-L01.txt", "Dani_A_2-L01.txt", "Dani_A_3-L01.txt", "Stephany-A-Musc-ABC-L01.txt", "AnaPao-A-Musc-ABC-L01.txt", "Isa3musculosA-L01.txt", "Diego-A-3abc-L01.txt", "Danna3musculos_A-L01.txt", "Sara-A-Musc-ABC-L01.txt", "Abril_A-L01.txt", "Felipe_A-L01.txt"],
+    1: ["Sebas-B-musc-3-ABC-L01.txt", "Lais-B-Musc-3-ABC-L01.txt", "Alejandra-B-Musc-ABC-L01.txt", "Dani_B_1-L01.txt", "Dani_B_2-L01.txt", "Dani_B_3-L01.txt", "Stephany-B-Musc-ABC-L01.txt", "AnaPao-B-Musc-ABC-L01.txt", "Isa3musculosB-L01.txt", "Diego-B-Musc-ABC-L01.txt", "Danna3Musculos_B-L01.txt", "Sara-B-Musc-ABC-L01.txt", "Abril_B-L01.txt", "Felipe_B-L01.txt"],
+    2: ["Sebas-C-Musc-3-ABC-L01.txt", "Lais-C-Musc-3-ABC-L01.txt", "Alejandra-C-Musc-ABC-L01.txt", "Dani_C_1-L01.txt", "Dani_C_2-L01.txt", "Dani_C_3-L01.txt", "Stephany-C-Musc-ABC-L01.txt", "AnaPao-C-Musc-ABC-L01.txt", "Isa3musculosC-L01.txt", "Diego-C-Musc-ABC-L01.txt", "Danna3musculos_C-L01.txt", "Sara-C-Musc-ABC-L01.txt", "Abril_C-L01.txt", "Felipe_C-L01.txt"]
+}
+
+fs = 2000
+num_classes = 3
+
+# ==========================================
+# 2. FUNCIONES DE PREPROCESAMIENTO
+# ==========================================
+
+def bandpass_filter(data, fs=2000, lowcut=20, highcut=450, order=4):
+    nyq = 0.5 * fs
+    b, a = signal.butter(order, [lowcut / nyq, highcut / nyq], btype="band")
+    return signal.filtfilt(b, a, data)
+
+def rectify(x):
+    return np.abs(x)
+
+def build_model():
+    """Función para instanciar una ANN fresca en cada evaluación."""
+    model = tf.keras.Sequential([
+        tf.keras.layers.Dense(32, activation="relu", input_shape=(4,)),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.Dropout(0.2),
+        tf.keras.layers.Dense(16, activation="relu"),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.Dropout(0.2),
+        tf.keras.layers.Dense(num_classes, activation="softmax")
+    ])
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.005),
+                  loss="categorical_crossentropy",
+                  metrics=["accuracy"])
+    return model
+
+# ==========================================
+# 3. EXTRACCIÓN DE CARACTERÍSTICAS
+# ==========================================
+
+X_total, y_total, groups_total = [], [], []
+
+
+subject_mapping = {0:0, 1:1, 2:2, 3:3, 4:3, 5:3, 6:4, 7:5, 8:6, 9:7, 10:8, 11:9, 12:10, 13:11}
+
+print("-> Iniciando extracción de características...")
+
+for label, files in files_per_class.items():
+    for file_idx, f in enumerate(files):
+        if os.path.exists(f):
+            df = pd.read_csv(f, skiprows=10, encoding="latin-1")
+            df = df.dropna(axis=1, how="all")
+            df.columns = ["t", "emg", "aux"]
+            
+            emg_f = bandpass_filter(df["emg"].values)
+            emg_r = rectify(emg_f)
+            
+            window = int(6 * fs)
+            n = len(emg_r) // window
+            
+            for i in range(n):
+                seg_f = emg_f[i*window:(i+1)*window]
+                seg_r = emg_r[i*window:(i+1)*window]
+                
+                rms = np.sqrt(np.mean(seg_f**2))
+                mav = np.mean(seg_r)
+                var = np.var(seg_f)
+                wl = np.sum(np.abs(np.diff(seg_f)))
+                
+                X_total.append([rms, mav, var, wl])
+                y_total.append(label)
+                groups_total.append(subject_mapping[file_idx])
+
+X_total = np.array(X_total)
+y_total = np.array(y_total)
+groups_total = np.array(groups_total)
+
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X_total)
+y_categorical = to_categorical(y_total, num_classes)
+
+print(f"-> Dataset procesado: {X_scaled.shape[0]} ventanas totales.")
+
+# ==========================================
+# FASE A: EVALUACIÓN INTRASUJETO (Mezclada)
+# ==========================================
+print("\n" + "="*50)
+print(" FASE A: EVALUACIÓN INTRASUJETO (POTENCIAL DEL MODELO) ")
+print("="*50)
+
+X_train_full, X_test_A, y_train_full, y_test_A = train_test_split(
+    X_scaled, y_categorical, test_size=0.15, random_state=42, stratify=y_total
+)
+X_train_A, X_val_A, y_train_A, y_val_A = train_test_split(
+    X_train_full, y_train_full, test_size=0.15, random_state=42
+)
+
+model_A = build_model()
+early_stop_A = tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=15, restore_best_weights=True)
+
+model_A.fit(X_train_A, y_train_A, epochs=120, batch_size=32, 
+            validation_data=(X_val_A, y_val_A), callbacks=[early_stop_A], verbose=0)
+
+loss_A, acc_A = model_A.evaluate(X_test_A, y_test_A, verbose=0)
+y_pred_A = np.argmax(model_A.predict(X_test_A, verbose=0), axis=1)
+y_true_A = np.argmax(y_test_A, axis=1)
+
+print(f"Accuracy Intrasujeto: {acc_A*100:.2f}%")
+print("\nReporte por clase (Intrasujeto):")
+print(classification_report(y_true_A, y_pred_A, target_names=["Seña A", "Seña B", "Seña C"]))
+
+cm_A = confusion_matrix(y_true_A, y_pred_A)
+
+# ==========================================
+# FASE B: EVALUACIÓN INTERSUJETO (LOSO)
+# ==========================================
+print("\n" + "="*50)
+print(" FASE B: EVALUACIÓN INTERSUJETO (VALIDACIÓN LOSO) ")
+print("="*50)
+
+logo = LeaveOneGroupOut()
+loso_acc = []
+all_true_B, all_pred_B = [], []
+
+for i, (train_index, test_index) in enumerate(logo.split(X_scaled, y_categorical, groups_total)):
+    X_train_B, X_test_B = X_scaled[train_index], X_scaled[test_index]
+    y_train_B, y_test_B = y_categorical[train_index], y_categorical[test_index]
+
+    model_B = build_model()
+    early_stop_B = tf.keras.callbacks.EarlyStopping(monitor="loss", patience=15, restore_best_weights=True)
+    
+    model_B.fit(X_train_B, y_train_B, epochs=120, batch_size=32, callbacks=[early_stop_B], verbose=0)
+
+    _, acc_B = model_B.evaluate(X_test_B, y_test_B, verbose=0)
+    preds_B = np.argmax(model_B.predict(X_test_B, verbose=0), axis=1)
+    true_B = np.argmax(y_test_B, axis=1)
+
+    loso_acc.append(acc_B)
+    all_true_B.extend(true_B)
+    all_pred_B.extend(preds_B)
+    print(f"Iteración LOSO {i+1} - Accuracy con usuario excluido: {acc_B*100:.2f}%")
+
+all_true_B = np.array(all_true_B)
+all_pred_B = np.array(all_pred_B)
+
+print(f"\nAccuracy Promedio LOSO: {np.mean(loso_acc)*100:.2f}%")
+print(f"Degradación respecto a Fase A: {(acc_A - np.mean(loso_acc))*100:.2f}%")
+
+cm_B = confusion_matrix(all_true_B, all_pred_B)
+
+# ==========================================
+# 4. VISUALIZACIÓN DE MATRICES
+# ==========================================
+fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+sns.heatmap(cm_A, annot=True, fmt="d", cmap="magma", ax=axes[0],
+            xticklabels=["Seña A", "Seña B", "Seña C"], yticklabels=["Seña A", "Seña B", "Seña C"])
+axes[0].set_title(f'Fase A: Intrasujeto\n(Accuracy: {acc_A*100:.2f}%)')
+axes[0].set_xlabel('Predicción')
+axes[0].set_ylabel('Gesto Real')
+
+sns.heatmap(cm_B, annot=True, fmt="d", cmap="Blues", ax=axes[1],
+            xticklabels=["Seña A", "Seña B", "Seña C"], yticklabels=["Seña A", "Seña B", "Seña C"])
+axes[1].set_title(f'Fase B: Intersujeto LOSO\n(Accuracy: {np.mean(loso_acc)*100:.2f}%)')
+axes[1].set_xlabel('Predicción')
+axes[1].set_ylabel('Gesto Real')
+
+plt.tight_layout()
+plt.show()
