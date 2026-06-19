@@ -26,7 +26,7 @@ Se aplicó una división aleatoria de los datos para evaluar la capacidad de la 
 * **Accuracy Global:** **75.00%**
 * El modelo demostró su mejor desempeño en la clasificación de la **Seña A**, alcanzando un *F1-score* de 0.88.
 
-> ![Matriz de Confusión Intrasujeto](ruta/a/tu/imagen_matriz_75.png)  
+> ![Matriz de Confusión Intrasujeto](Matriz de confusion.png)  
 > *Figura 1. Matriz de confusión evidenciando una separación efectiva, con zonas de reto concentradas entre las señas B y C.*
 
 ### 2. Evaluación Intersujeto (Validación LOSO)
